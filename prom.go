@@ -62,6 +62,8 @@ type Prometheus struct {
 	RequestDurationMetricName string
 	RequestSizeMetricName     string
 	ResponseSizeMetricName    string
+
+	CustomCounterLabels map[string]string
 }
 
 // IncrementGaugeValue increments a custom gauge.
@@ -234,6 +236,13 @@ func Engine(e *gin.Engine) func(*Prometheus) {
 	}
 }
 
+// AdditionalCounterLabels is an option allowing adds label for counter.
+func AdditionalCounterLabels(labels map[string]string) func(*Prometheus) {
+	return func(p *Prometheus) {
+		p.CustomCounterLabels = labels
+	}
+}
+
 // Registry is an option allowing to set a  *prometheus.Registry with New.
 // Use this option if you want to use a custom Registry instead of a global one that prometheus
 // client uses by default
@@ -284,6 +293,12 @@ func (p *Prometheus) getRegistererAndGatherer() (prometheus.Registerer, promethe
 
 func (p *Prometheus) register() {
 	registerer, _ := p.getRegistererAndGatherer()
+
+	counterLabels := []string{"code", "method", "handler", "host", "path"}
+	for key, _ := range p.CustomCounterLabels {
+		counterLabels = append(counterLabels, key)
+	}
+
 	p.reqCnt = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: p.Namespace,
@@ -291,7 +306,7 @@ func (p *Prometheus) register() {
 			Name:      p.RequestCounterMetricName,
 			Help:      "How many HTTP requests processed, partitioned by status code and HTTP method.",
 		},
-		[]string{"code", "method", "handler", "host", "path"},
+		counterLabels,
 	)
 	registerer.MustRegister(p.reqCnt)
 
@@ -352,7 +367,15 @@ func (p *Prometheus) Instrument() gin.HandlerFunc {
 		elapsed := float64(time.Since(start)) / float64(time.Second)
 		resSz := float64(c.Writer.Size())
 
-		p.reqCnt.WithLabelValues(status, c.Request.Method, c.HandlerName(), c.Request.Host, path).Inc()
+		counterValues := []string{
+			status, c.Request.Method, c.HandlerName(), c.Request.Host, path,
+		}
+
+		for _, value := range p.CustomCounterLabels {
+			counterValues = append(counterValues, value)
+		}
+
+		p.reqCnt.WithLabelValues(counterValues...).Inc()
 		p.reqDur.WithLabelValues(c.Request.Method, path, c.Request.Host).Observe(elapsed)
 		p.reqSz.Observe(float64(reqSz))
 		p.resSz.Observe(resSz)
